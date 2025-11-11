@@ -1,0 +1,27 @@
+# World geometry
+width: 50
+height: 50
+torus: false          # wrap-around grid (false = hard borders)
+
+# Fire environment
+ignitions: 3          # num of random ignition points
+base_spread_p: 0.40   # baseline spread probability per burning cell
+intensity_decay: 0.25 # burn-down per tick (1.0 -> 0 in ~4 ticks)
+reignite_allowed: false
+
+# Optional wind bias (0 = no wind). Spread favors this direction.
+wind_dx: 0            # -1 to 1
+wind_dy: 0            # -1 to 1
+wind_bias: 0.15       # added probability toward wind-facing neighbors
+
+# Firefighters
+firefighters: 24
+perception_r: 6       # how far a firefighter can see burning tiles
+comm_r: 6             # radio range (use 9999 for "global")
+comm_freq: 2          # ticks between broadcasts (0 = no comms)
+max_water: 6          # extinguishes per refill
+
+#Run control
+max_ticks: 300
+random_seed: 28
+log_dir: "output"
