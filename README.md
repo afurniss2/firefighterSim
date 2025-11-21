@@ -45,22 +45,22 @@ All fire dynamics occur independently of the firefighters.
 
 ## Firefighter Agent
 Each firefighter behaves autonomously using only local info
-### Local Perception
+#### Local Perception
 - Detects burning cells within radius perception_r.
-### Local Communication
+#### Local Communication
 - Periodacally broadcasts local fire coordinates to a shared radio board
 - Only recieves messages within comm_r
-### Internal State
+#### Internal State
 - water supply and max_water capacity
 - Must visit border to refill
 - Finite-state behavioral modes:
   - ATTACK: move toward fire
   - REFILL: move toward border
   - SCOUT: random patrol
-### Movement & Extinguishing
+#### Movement & Extinguishing
 - Moves one cell per tick toward target fire or radio report
 - Extinguishes a burning cell if standing on it and has water
-### Local Coordination via Emergence
+#### Local Coordination via Emergence
 - Uses a claimed_targets set to avoid duplication and spread agents across the fire front
 - No global planner or central control
 
