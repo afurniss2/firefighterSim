@@ -1,8 +1,12 @@
 # model.py
 import os
 import math
+import shutil
 from typing import List, Tuple, Optional
 from enum import IntEnum
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 import numpy as np
 from mpi4py import MPI
@@ -15,7 +19,7 @@ from repast4py.geometry import BoundingBox
 from repast4py.logging import TabularLogger, DataSource
 from repast4py import random as rrandom
 
-from agents import Firefighter, TYPE_FIREFIGHTER  # Fire is now an environment grid
+from agents import Firefighter, TYPE_FIREFIGHTER, FFMode  # Fire is now an environment grid
 
 class FireState(IntEnum):
     SAFE = 0
@@ -26,11 +30,14 @@ class FireState(IntEnum):
 
 class RadioBoard:
     def __init__(self):
-        self.reports: List[Tuple[int, int]] = []
+        self.reports: List[Tuple[int, int, int]] = []
 
-    def post(self, x: int, y: int):
-        self.reports.append((x, y))
-
+    def post(self, x: int, y: int, tick: int):
+        self.reports.append((x, y, tick))
+    
+    def get_recent(self, current_tick: int, max_age: int = 5):
+        return [(x, y) for (x, y, t) in self.reports if current_tick - t <= max_age]
+    
     def clear(self):
         self.reports.clear()
 
@@ -77,6 +84,8 @@ class WildfireModel:
         self.comm = MPI.COMM_WORLD
         rrandom.init(self.seed)
 
+        self._clear_output_dir()
+
         self.context = SharedContext(self.comm)
 
         self.grid = SharedGrid(
@@ -99,8 +108,6 @@ class WildfireModel:
             x = int(rrandom.default_rng.integers(0, self.width))
             y = int(rrandom.default_rng.integers(0, self.height))
             self._ignite_cell(x, y)
-        print(f"[init] initial burning = {self.count_burning()} (expected 3)")
-
         # Firefighters
         aid = 1
         for _ in range(self.ff_count):
@@ -195,81 +202,149 @@ class WildfireModel:
             self._ignite_cell(ix, iy)
 
     def firefighters_step(self):
-        # build burning set for quick lookups
         burning_coords = np.argwhere(self.fire_state == int(FireState.BURNING))
-        burning_set = { (int(x), int(y)) for x, y in burning_coords }
+        burning_set = {(int(x), int(y)) for x, y in burning_coords}
 
-        # 1) broadcasting
+        # 1) Broadcasting phase
         for ff in self.context.agents(TYPE_FIREFIGHTER):
             ff.step_tick()
+
             if ff.ready_to_broadcast():
                 x, y = self._loc(ff)
                 r = ff.perception_r
                 posted = 0
+
                 x0, x1 = max(0, x - r), min(self.width, x + r + 1)
                 y0, y1 = max(0, y - r), min(self.height, y + r + 1)
+
                 for ix in range(x0, x1):
                     for iy in range(y0, y1):
                         if (ix, iy) in burning_set:
-                            self.radio.post(ix, iy)
+                            self.radio.post(ix, iy, self.tick)
                             posted += 1
                             if posted >= 8:
                                 break
                     if posted >= 8:
                         break
+
                 ff.messages_sent += posted
                 self.messages += posted
 
-        # 2) move + extinguish
+        # 2) Decision + movement + extinguish
+        claimed_targets = set()
+
         for ff in self.context.agents(TYPE_FIREFIGHTER):
             x, y = self._loc(ff)
 
-            target = self._nearest_burning_in_vision(x, y, ff.perception_r, burning_set)
-            if target is None:
-                target = self._nearest_radio(x, y, ff.comm_r)
+            # If out of water, must go refill
+            if ff.water == 0:
+                ff.mode = FFMode.REFILL
+            # If previously refilling and now has water, go back to ATTACK
+            elif ff.mode == FFMode.REFILL and ff.water > 0:
+                ff.mode = FFMode.ATTACK
 
+            target = None
+
+            if ff.mode == FFMode.REFILL:
+                # Head toward nearest refill point (border)
+                target = self._nearest_refill_point(x, y)
+
+            else:
+                # ATTACK or SCOUT behavior
+
+                # 1) Prefer local burning cells within perception, not already claimed
+                candidate = self._nearest_burning_in_vision(x, y, ff.perception_r, burning_set)
+                if candidate is not None and candidate not in claimed_targets:
+                    target = candidate
+                else:
+                    # 2) Use radio reports as backup, avoiding already-claimed targets
+                    candidate = self._nearest_radio(x, y, ff.comm_r)
+                    if candidate is not None and candidate not in claimed_targets:
+                        target = candidate
+
+                # 3) If still no target, switch to SCOUT (random patrol)
+                if target is None:
+                    ff.mode = FFMode.SCOUT
+
+            # ----- MOVE -----
             if target is not None:
+                claimed_targets.add(target)
                 tx, ty = target
                 dx = int(np.sign(tx - x))
                 dy = int(np.sign(ty - y))
-                self.grid.move(ff, DiscretePoint(self._clip(x + dx, 0, self.width - 1),
-                                                 self._clip(y + dy, 0, self.height - 1)))
+
+                self.grid.move(
+                    ff,
+                    DiscretePoint(
+                        self._clip(x + dx, 0, self.width - 1),
+                        self._clip(y + dy, 0, self.height - 1),
+                    ),
+                )
             else:
-                # small random patrol
+                # SCOUT: random patrol
                 rx = self._clip(x + int(rrandom.default_rng.integers(-1, 2)), 0, self.width - 1)
                 ry = self._clip(y + int(rrandom.default_rng.integers(-1, 2)), 0, self.height - 1)
                 self.grid.move(ff, DiscretePoint(rx, ry))
 
-            # extinguish if standing on burning cell and has water
+            # ----- AFTER MOVE: extinguish / refill -----
             nx, ny = self._loc(ff)
+
+            # Try to extinguish if standing on burning cell and has water
             if ff.water > 0 and self.fire_state[nx, ny] == int(FireState.BURNING):
                 self._extinguish_cell(nx, ny)
                 ff.water -= 1
+                ff.mode = FFMode.ATTACK  # still in attack mode
+
             else:
-                # instant refill on border (simple placeholder rule)
-                if ff.water == 0 and (nx == 0 or ny == 0 or nx == self.width - 1 or ny == self.height - 1):
+                # Refill on border when out of water
+                if (
+                    ff.water == 0
+                    and (nx == 0 or ny == 0 or nx == self.width - 1 or ny == self.height - 1)
+                ):
                     ff.water = ff.max_water
+                    ff.mode = FFMode.ATTACK
+
 
     def _nearest_burning_in_vision(self, x, y, r, burning_set) -> Optional[Tuple[int, int]]:
-        best = None
-        best_d = 10**9
+        best_frontier = None
+        best_frontier_d = 10**9
+
+        best_any = None
+        best_any_d = 10**9
+
         x0, x1 = max(0, x - r), min(self.width, x + r + 1)
         y0, y1 = max(0, y - r), min(self.height, y + r + 1)
+
         for ix in range(x0, x1):
             for iy in range(y0, y1):
                 if (ix, iy) in burning_set:
                     d = abs(ix - x) + abs(iy - y)
-                    if d < best_d:
-                        best_d = d
-                        best = (ix, iy)
-        return best
+
+                    # track best "any burning" cell
+                    if d < best_any_d:
+                        best_any_d = d
+                        best_any = (ix, iy)
+
+                    # track best frontier cell
+                    if self._is_frontier_cell(ix, iy) and d < best_frontier_d:
+                        best_frontier_d = d
+                        best_frontier = (ix, iy)
+
+        # Prefer frontier if we saw one, else any burning
+        return best_frontier if best_frontier is not None else best_any
+
 
     def _nearest_radio(self, x, y, comm_r) -> Optional[Tuple[int, int]]:
         if comm_r <= 0 or not self.radio.reports:
             return None
+        
+        recent_reports = self.radio.get_recent(self.tick, max_age=5)
+        if not recent_reports:
+            return None
+    
         best = None
         best_d = 10**9
-        for (ix, iy) in self.radio.reports:
+        for (ix, iy) in recent_reports:
             d = abs(ix - x) + abs(iy - y)
             if comm_r >= 9999 or d <= comm_r:
                 if d < best_d:
@@ -293,6 +368,9 @@ class WildfireModel:
             self.ff_count,
             (-1 if math.isnan(self.contained_at) else self.contained_at),
         )
+        if self.tick % 1 == 0:
+            self.render_snapshot()
+
         if self.tick % 5 == 0:
           print(f"[tick {self.tick}] burning={self.count_burning()} "
              f"burnt={self.count_burnt()} ext={self.count_extinguished()} msgs={self.messages}")
@@ -316,6 +394,88 @@ class WildfireModel:
       print(f"[DONE] tick={self.tick} burning={self.count_burning()} "
             f"burnt={self.count_burnt()} extinguished={self.count_extinguished()} "
             f"messages={self.messages} contained_at={self.contained_at}")
+    
+    def _nearest_refill_point(self, x: int, y: int) -> Tuple[int, int]:
+        candidates = [
+            (0, y),                        # left
+            (self.width - 1, y),           # right
+            (x, 0),                        # bottom
+            (x, self.height - 1),          # top
+        ]
+        best = None
+        best_d = 10**9
+        for cx, cy in candidates:
+            d = abs(cx - x) + abs(cy - y)
+            if d < best_d:
+                best_d = d
+                best = (cx, cy)
+        return best
+    
+    def _is_frontier_cell(self, x: int, y: int) -> bool:
+       # borders at least one SAFE cell
+        if self.fire_state[x, y] != int(FireState.BURNING):
+            return False
+        for nx, ny in self._neighbors(x, y):
+            if self.fire_state[nx, ny] == int(FireState.SAFE):
+                return True
+        return False
+
+    
+    def render_snapshot(self):
+        if self.comm.rank != 0:
+            return
+
+        # Base image from fire_state
+        # shape: (height, width, 3) for RGB
+        img = np.zeros((self.height, self.width, 3), dtype=np.float32)
+
+        # SAFE         -> light gray
+        # BURNING      -> red
+        # BURNT        -> dark gray / black
+        # EXTINGUISHED -> blue
+        for x in range(self.width):
+            for y in range(self.height):
+                fs = self.fire_state[x, y]
+                if fs == int(FireState.SAFE):
+                    img[y, x] = [0.8, 0.8, 0.8]
+                elif fs == int(FireState.BURNING):
+                    img[y, x] = [1.0, 0.0, 0.0]
+                elif fs == int(FireState.BURNT):
+                    img[y, x] = [0.2, 0.2, 0.2]
+                elif fs == int(FireState.EXTINGUISHED):
+                    img[y, x] = [0.0, 0.0, 1.0]
+
+        # Overlay firefighters as green dots
+        ff_x = []
+        ff_y = []
+        for ff in self.context.agents(TYPE_FIREFIGHTER):
+            x, y = self._loc(ff)
+            ff_x.append(x)
+            ff_y.append(y)
+
+        plt.figure(figsize=(5, 5))
+        plt.imshow(img, origin="lower")  # (0,0) bottom-left-ish
+        if ff_x:
+            plt.scatter(ff_x, ff_y, s=20, edgecolors="k", facecolors="lime")
+
+        plt.title(f"Tick {self.tick}")
+        plt.axis("off")
+
+        snap_dir = os.path.join(self.log_dir, "snapshots")
+        os.makedirs(snap_dir, exist_ok=True)
+        fname = os.path.join(snap_dir, f"snap_{self.tick:04d}.png")
+        plt.savefig(fname, bbox_inches="tight")
+        plt.close()
+
+    def _clear_output_dir(self):
+        """Remove old run outputs so each run starts clean."""
+        if self.comm.rank != 0:
+            return
+
+        if os.path.exists(self.log_dir):
+            shutil.rmtree(self.log_dir)
+        os.makedirs(self.log_dir, exist_ok=True)
+
 
 
 if __name__ == "__main__":

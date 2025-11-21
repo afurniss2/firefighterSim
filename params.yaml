@@ -1,11 +1,11 @@
 # World geometry
-width: 50
-height: 50
+width: 30
+height: 30
 torus: false          # wrap-around grid (false = hard borders)
 
 # Fire environment
 ignitions: 3          # num of random ignition points
-base_spread_p: 0.40   # baseline spread probability per burning cell
+base_spread_p: 0.30  # baseline spread probability per burning cell
 intensity_decay: 0.25 # burn-down per tick (1.0 -> 0 in ~4 ticks)
 reignite_allowed: false
 
@@ -23,5 +23,5 @@ max_water: 6          # extinguishes per refill
 
 #Run control
 max_ticks: 300
-random_seed: 28
+random_seed: 51
 log_dir: "output"
