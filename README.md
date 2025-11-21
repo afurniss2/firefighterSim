@@ -73,6 +73,7 @@ During each run, the system logs:
 - Total messages sent
 - Number of firefighters
 - Containment time
+
 Which are recorded in 
 ```bash
 output/metrics.csv
