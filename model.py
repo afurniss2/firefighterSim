@@ -202,6 +202,9 @@ class WildfireModel:
             self._ignite_cell(ix, iy)
 
     def firefighters_step(self):
+        if self.ff_count == 0:
+            return
+        
         burning_coords = np.argwhere(self.fire_state == int(FireState.BURNING))
         burning_set = {(int(x), int(y)) for x, y in burning_coords}
 
@@ -448,13 +451,17 @@ class WildfireModel:
         # Overlay firefighters as green dots
         ff_x = []
         ff_y = []
-        for ff in self.context.agents(TYPE_FIREFIGHTER):
-            x, y = self._loc(ff)
-            ff_x.append(x)
-            ff_y.append(y)
+        if self.ff_count > 0:
+            try:
+                for ff in self.context.agents(TYPE_FIREFIGHTER):
+                    x, y = self._loc(ff)
+                    ff_x.append(x)
+                    ff_y.append(y)
+            except KeyError:
+                pass
 
         plt.figure(figsize=(5, 5))
-        plt.imshow(img, origin="lower")  # (0,0) bottom-left-ish
+        plt.imshow(img, origin="lower")
         if ff_x:
             plt.scatter(ff_x, ff_y, s=20, edgecolors="k", facecolors="lime")
 
