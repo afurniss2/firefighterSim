@@ -74,9 +74,10 @@ During each run, the system logs:
 - Number of firefighters
 - Containment time
 Which are recorded in 
-```
-output/metrics.csv
 ```bash
+output/metrics.csv
+```
+
 We also record visual snapshots which are saved in 
 ```bash
 output/snapshots
