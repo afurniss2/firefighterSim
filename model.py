@@ -18,6 +18,7 @@ from repast4py.space import SharedGrid, DiscretePoint, BorderType, OccupancyType
 from repast4py.geometry import BoundingBox
 from repast4py.logging import TabularLogger, DataSource
 from repast4py import random as rrandom
+from collections import Counter
 
 from agents import Firefighter, TYPE_FIREFIGHTER, FFMode  # Fire is now an environment grid
 
@@ -129,6 +130,14 @@ class WildfireModel:
         self.tick = 0
         self.messages = 0
         self.contained_at = math.nan
+
+        # Experiment 3 Additions
+        self.perception_decisions = 0
+        self.perception_idle_decisions = 0
+        self.perception_cells_scanned = 0
+
+        # Experiment 4 Addition
+        self.collision_events = 0
 
         os.makedirs(self.log_dir, exist_ok=True)
         self.logger = TabularLogger(
@@ -307,8 +316,21 @@ class WildfireModel:
                     ff.water = ff.max_water
                     ff.mode = FFMode.ATTACK
 
+        # Experiment 4
+        # Count how many extra firefighters share the same cell.
+        positions = []
+        for ff in self.context.agents(TYPE_FIREFIGHTER):
+            positions.append(self._loc(ff))
+
+        if positions:
+            counts = Counter(positions)
+            step_collisions = sum(c - 1 for c in counts.values() if c > 1)
+            self.collision_events += step_collisions
+
+
 
     def _nearest_burning_in_vision(self, x, y, r, burning_set) -> Optional[Tuple[int, int]]:
+        self.perception_decisions += 1
         best_frontier = None
         best_frontier_d = 10**9
 
@@ -318,9 +340,15 @@ class WildfireModel:
         x0, x1 = max(0, x - r), min(self.width, x + r + 1)
         y0, y1 = max(0, y - r), min(self.height, y + r + 1)
 
+        saw_burning = False
+        cells_scanned = 0
+
         for ix in range(x0, x1):
             for iy in range(y0, y1):
+                cells_scanned += 1
+
                 if (ix, iy) in burning_set:
+                    saw_burning = True
                     d = abs(ix - x) + abs(iy - y)
 
                     # track best "any burning" cell
@@ -332,6 +360,11 @@ class WildfireModel:
                     if self._is_frontier_cell(ix, iy) and d < best_frontier_d:
                         best_frontier_d = d
                         best_frontier = (ix, iy)
+
+        # Experiment 3 Global Counters
+        self.perception_cells_scanned += cells_scanned
+        if not saw_burning:
+            self.perception_idle_decisions += 1
 
         # Prefer frontier if we saw one, else any burning
         return best_frontier if best_frontier is not None else best_any
