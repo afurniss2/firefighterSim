@@ -24,7 +24,7 @@ class Firefighter(Agent):
         self._tick = 0
         self.mode = FFMode.ATTACK
 
-    def save(self) -> Tuple[int, int, int, int, int, int, int]:
+    def save(self) -> Tuple[int, int, int, int, int, int, int, int]:
         return (
             self.max_water,
             self.water,
@@ -36,7 +36,7 @@ class Firefighter(Agent):
             int(self.mode),
         )
 
-    def update(self, data: Tuple[int, int, int, int, int, int, int]):
+    def update(self, data: Tuple[int, int, int, int, int, int, int, int]):
         (
             self.max_water,
             self.water,
@@ -45,6 +45,7 @@ class Firefighter(Agent):
             self.comm_freq,
             self.messages_sent,
             self._tick,
+            mode_val
         ) = map(int, data)
         self.mode = FFMode(mode_val)
 
