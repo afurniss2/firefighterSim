@@ -3,7 +3,7 @@ import os
 from repast4py import parameters
 
 from model import WildfireModel
-from experiment3_logger import Experiment3Logger
+from experiment_3_log import Experiment3Logger
 
 
 # Perception radius values

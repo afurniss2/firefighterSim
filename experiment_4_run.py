@@ -3,7 +3,7 @@ import os
 from repast4py import parameters
 
 from model import WildfireModel
-from experiment4_logger import Experiment4Logger
+from experiment_4_log import Experiment4Logger
 
 
 FIREFIGHTER_VALUES = [4, 8, 12, 16, 24, 32, 40]
